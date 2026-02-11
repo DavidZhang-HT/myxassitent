@@ -1,5 +1,5 @@
 ---
-name: myxassistant
+name: MyXAssistant
 description: Interact with the MyXAssistant service to sync X likes, search liked posts, get stats, and publish posts. Use when the user asks to sync likes, fetch new likes, search liked posts, query X data, check like stats, or post to X.
 ---
 
