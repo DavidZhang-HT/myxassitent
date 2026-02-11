@@ -336,21 +336,23 @@ class TwitterAPI:
 # Core sync function
 # ---------------------------------------------------------------------------
 def sync_from_api(db_path: Path | None = None, on_progress=None,
-                   max_pages: int = 1) -> dict:
+                   max_pages: int | None = None) -> dict:
     """
-    Fetch latest likes from Twitter API v2 and write directly to SQLite.
+    增量同步：从最新一条开始，逐条比对，遇已有数据即停。
 
-    默认只请求第一页（最多 100 条最新点赞），以节省 API 调用配额。
-    Twitter likes API 返回的是按时间倒序排列的，所以第一页就是最新的点赞。
-    对于日常增量同步，一页足够覆盖两次同步之间的新增点赞。
+    规则：
+    1. API 用 max_results=1 逐条拉取（每条 1 次 API 调用）
+    2. 与数据库「上次同步的最后一条」对比，一致 → 无更新，直接结束
+    3. 不一致 → 查库，无则入库，继续拉下一条
+    4. 直到某条已存在于库中，说明追上历史，停止
+
+    最佳情况（无新点赞）：2 次 API 调用（user_id + 首条 likes）
+    有新点赞时：2 + 新增条数 次调用。
 
     Args:
-        db_path:      Path to SQLite database (default: project dir)
-        on_progress:  Optional callback(message: str) for progress updates
-        max_pages:    最多请求的页数（默认 1，即只请求第一页，仅 1 次 API 调用）
-
-    Returns:
-        dict with keys: new_count, total_fetched, status, message, api_calls
+        db_path:    Path to SQLite database (default: project dir)
+        on_progress: Optional callback(message: str)
+        max_pages:  None=增量模式（逐条直到追上）；>0 时限制最大页数
     """
     if db_path is None:
         db_path = DB_PATH
@@ -374,20 +376,26 @@ def sync_from_api(db_path: Path | None = None, on_progress=None,
         init_db(conn)
         cur = conn.cursor()
         cat_cache: dict[str, int] = {}
-
-        # Pre-load category cache
         for row in cur.execute("SELECT id, name FROM categories"):
             cat_cache[row[1]] = row[0]
 
+        # 数据库中最新的 tweet_id（上次同步的最后一条）
+        db_newest = cur.execute(
+            "SELECT tweet_id FROM tweets ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        db_newest_id = db_newest[0] if db_newest else None
+        log(f"数据库最新 tweet_id: {db_newest_id or '(空)'}")
+
         pagination_token = None
-        page = 0
+        page_count = 0
+        max_pages = max_pages if max_pages is not None else 99999
 
-        while page < max_pages:
-            page += 1
-            log(f"正在获取第 {page}/{max_pages} 页...")
-
+        while page_count < max_pages:
+            page_count += 1
             try:
-                resp = api.get_liked_tweets(user_id, pagination_token=pagination_token)
+                resp = api.get_liked_tweets(
+                    user_id, max_results=10, pagination_token=pagination_token
+                )
                 result["api_calls"] += 1
             except Exception as e:
                 log(f"API 请求失败: {e}")
@@ -402,12 +410,26 @@ def sync_from_api(db_path: Path | None = None, on_progress=None,
                 log("没有更多数据。")
                 break
 
-            page_new = 0
+            hit_existing = False
             for t in tweets_data:
+                tid = t["id"]
+
+                # 首条：与数据库最新对比，一致则无更新
+                if result["total_fetched"] == 0 and tid == db_newest_id:
+                    log("首条与数据库最新一致，无新数据。")
+                    hit_existing = True
+                    break
+
+                cur.execute("SELECT 1 FROM tweets WHERE tweet_id = ?", (tid,))
+                if cur.fetchone():
+                    log(f"已存在 id={tid}，已追上历史。")
+                    hit_existing = True
+                    break
+
                 author = users.get(t.get("author_id"), {})
                 metrics = t.get("public_metrics", {})
                 tweet = {
-                    "tweet_id": t["id"],
+                    "tweet_id": tid,
                     "created_at": t.get("created_at", ""),
                     "text": t.get("text", ""),
                     "author_name": author.get("name", ""),
@@ -415,19 +437,15 @@ def sync_from_api(db_path: Path | None = None, on_progress=None,
                     "author_id": t.get("author_id", ""),
                     "retweet_count": metrics.get("retweet_count", 0),
                     "favorite_count": metrics.get("like_count", 0),
-                    "tweet_url": f"https://twitter.com/{author.get('username', '')}/status/{t['id']}",
+                    "tweet_url": f"https://twitter.com/{author.get('username', '')}/status/{tid}",
                 }
                 if insert_tweet(cur, tweet, cat_cache):
-                    page_new += 1
+                    result["new_count"] += 1
                 result["total_fetched"] += 1
+                log(f"  新增 id={tid}")
 
-            result["new_count"] += page_new
             conn.commit()
-            log(f"  第 {page} 页: {len(tweets_data)} 条, 新增 {page_new} 条")
-
-            # 如果本页全是已有数据，无需继续翻页
-            if page_new == 0:
-                log("本页无新数据，已同步至最新。")
+            if hit_existing:
                 break
 
             pagination_token = resp.get("meta", {}).get("next_token")
@@ -519,16 +537,11 @@ if __name__ == "__main__":
         print(f"从 JSON 文件导入: {sys.argv[1]}")
         result = sync_from_json(sys.argv[1])
     else:
-        # Sync from Twitter API
-        full_mode = "--full" in sys.argv
-        pages = 999 if full_mode else 1
-        mode_label = "完整同步" if full_mode else "增量同步 (仅第一页)"
-        print(f"从 Twitter API {mode_label}...")
+        # Sync from Twitter API — 逐条同步直到追上历史
+        print("从 Twitter API 增量同步（逐条比对，追上即停）...")
         print(f"数据库: {DB_PATH}")
         print(f"凭证: {_resolve_config_path()}")
-        if not full_mode:
-            print("提示: 使用 --full 参数可获取全部历史数据")
-        result = sync_from_api(max_pages=pages)
+        result = sync_from_api()
 
     print(f"\n结果: {json.dumps(result, ensure_ascii=False, indent=2)}")
     sys.exit(0 if result["status"] != "error" else 1)

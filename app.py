@@ -424,9 +424,6 @@ def api_sync():
     if _sync_status["running"]:
         return jsonify({"status": "already_running", "message": "同步正在进行中..."}), 409
 
-    body = request.get_json(silent=True) or {}
-    max_pages = 999 if body.get("full") else 1
-
     def run_sync():
         from sync import sync_from_api
         _sync_status["running"] = True
@@ -435,7 +432,6 @@ def api_sync():
             result = sync_from_api(
                 db_path=DB_PATH,
                 on_progress=lambda msg: _sync_status["progress"].append(msg),
-                max_pages=max_pages,
             )
             _sync_status["last_result"] = result
         except Exception as e:
