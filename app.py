@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-<<<<<<< HEAD
-"""Flask application for MyXAssistant."""
-=======
 """
-MyXAssistant — Twitter/X 数据服务。
+MyXAssistant — X 数据服务。
 
 作为独立 HTTP 服务运行，对外提供统一的 REST API：
-  - 数据同步（从 Twitter API 拉取 likes）
+  - 数据同步（从 X API 拉取 likes）
   - 数据查询（搜索、筛选、统计）
   - 发布推文
   - 网页展示
 
 外部系统（如 OpenClaw）通过 HTTP API 与本服务交互，不直接访问数据库或脚本。
 """
->>>>>>> eebf01508a3af3c99b4621846c4b7ab6a74f99e3
 
 import sqlite3
 import threading
