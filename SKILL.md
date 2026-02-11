@@ -8,7 +8,7 @@ description: Interact with the MyXAssistant service to sync X likes, search like
 MyXAssistant 是一个独立的 HTTP 服务，管理用户的 Twitter/X 点赞数据和发推。
 所有操作通过 HTTP API 完成，不要直接访问数据库或运行脚本。
 
-**服务地址：** `http://127.0.0.1:5000`
+**服务地址：** `http://127.0.0.1:5001`
 
 ## API 参考
 
@@ -19,6 +19,24 @@ GET /api/health
 ```
 
 返回服务状态、数据库推文总数、是否正在同步。用于确认服务是否在线。
+
+### 1.1 认证状态
+
+```
+GET /auth/status
+```
+
+返回 OAuth 1.0a 和 OAuth 2.0 的配置状态。
+
+### 1.2 OAuth 2.0 授权
+
+引导用户浏览器访问以下地址开始授权：
+
+```
+GET /auth/login
+```
+
+授权完成后 X 会重定向到 `/callback`，自动交换并保存 tokens。
 
 ---
 
@@ -106,27 +124,27 @@ Content-Type: application/json
 
 **同步最新数据：**
 ```bash
-curl -X POST http://127.0.0.1:5000/api/sync
+curl -X POST http://127.0.0.1:5001/api/sync
 ```
 
 **等待完成并检查结果：**
 ```bash
-curl http://127.0.0.1:5000/api/sync/status
+curl http://127.0.0.1:5001/api/sync/status
 ```
 
 **搜索 AI 相关推文：**
 ```bash
-curl "http://127.0.0.1:5000/api/tweets?q=AI&sort=favorite_count&per_page=5"
+curl "http://127.0.0.1:5001/api/tweets?q=AI&sort=favorite_count&per_page=5"
 ```
 
 **查看某个作者的所有点赞：**
 ```bash
-curl "http://127.0.0.1:5000/api/tweets?author=kwindla"
+curl "http://127.0.0.1:5001/api/tweets?author=kwindla"
 ```
 
 **发一条推文：**
 ```bash
-curl -X POST http://127.0.0.1:5000/api/publish \
+curl -X POST http://127.0.0.1:5001/api/publish \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello from MyXAssistant!"}'
 ```

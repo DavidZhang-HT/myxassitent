@@ -11,20 +11,31 @@ MyXAssistant — X 数据服务。
 外部系统（如 OpenClaw）通过 HTTP API 与本服务交互，不直接访问数据库或脚本。
 """
 
+import base64
+import hashlib
+import json
+import os
+import secrets
 import sqlite3
 import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, redirect, render_template, request, session
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", secrets.token_hex(32))
+
 DB_PATH = Path(__file__).parent / "myxassistant.db"
+PROJECT_DIR = Path(__file__).parent
 
 # Sync state (shared across requests)
 _sync_lock = threading.Lock()
 _sync_status = {"running": False, "last_result": None, "progress": []}
 
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.1.0"
+CALLBACK_URL = "http://127.0.0.1:5001/callback"
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +74,175 @@ def api_health():
         "version": SERVICE_VERSION,
         "db_tweets": total,
         "sync_running": _sync_status["running"],
+    })
+
+
+# ---------------------------------------------------------------------------
+# OAuth 2.0 helpers
+# ---------------------------------------------------------------------------
+def _load_config() -> dict[str, str]:
+    """Load config.env from project directory."""
+    from sync import _load_env_file, _resolve_config_path
+    return _load_env_file(_resolve_config_path())
+
+
+def _save_oauth_tokens(tokens: dict):
+    """Append/update OAuth 2.0 tokens to config.env."""
+    config_path = PROJECT_DIR / "config.env"
+    existing = {}
+    if config_path.exists():
+        for line in config_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+
+    # Update with new tokens
+    if tokens.get("access_token"):
+        existing["OAUTH2_ACCESS_TOKEN"] = tokens["access_token"]
+    if tokens.get("refresh_token"):
+        existing["OAUTH2_REFRESH_TOKEN"] = tokens["refresh_token"]
+    if tokens.get("token_type"):
+        existing["OAUTH2_TOKEN_TYPE"] = tokens["token_type"]
+    if tokens.get("scope"):
+        existing["OAUTH2_SCOPE"] = tokens["scope"]
+
+    # Rewrite config.env
+    lines = ["# MyXAssistant Configuration", "# Security: chmod 600, do not commit to git", ""]
+    for k, v in existing.items():
+        lines.append(f"{k}={v}")
+    lines.append("")
+    config_path.write_text("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# OAuth 2.0 Authorization Code Flow with PKCE
+# ---------------------------------------------------------------------------
+@app.route("/auth/login")
+def auth_login():
+    """Start OAuth 2.0 flow. Redirects to X authorization page."""
+    config = _load_config()
+    client_id = config.get("TWITTER_CLIENT_ID", "")
+    if not client_id:
+        return jsonify({
+            "error": "Missing TWITTER_CLIENT_ID in config.env",
+            "help": "Add your OAuth 2.0 Client ID from https://developer.x.com/en/portal/dashboard"
+        }), 400
+
+    # Generate PKCE code verifier & challenge
+    code_verifier = secrets.token_urlsafe(64)[:128]
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+
+    state = secrets.token_urlsafe(32)
+
+    # Store in session
+    session["oauth_code_verifier"] = code_verifier
+    session["oauth_state"] = state
+
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": CALLBACK_URL,
+        "scope": "tweet.read tweet.write users.read like.read like.write offline.access",
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    auth_url = f"https://twitter.com/i/oauth2/authorize?{urllib.parse.urlencode(params)}"
+    return redirect(auth_url)
+
+
+@app.route("/callback")
+def auth_callback():
+    """Handle OAuth 2.0 callback from X."""
+    error = request.args.get("error")
+    if error:
+        return jsonify({
+            "status": "error",
+            "error": error,
+            "description": request.args.get("error_description", ""),
+        }), 400
+
+    code = request.args.get("code")
+    state = request.args.get("state")
+
+    if not code:
+        return jsonify({"error": "Missing authorization code"}), 400
+
+    # Verify state
+    expected_state = session.pop("oauth_state", None)
+    if state != expected_state:
+        return jsonify({"error": "Invalid state parameter"}), 400
+
+    code_verifier = session.pop("oauth_code_verifier", None)
+    if not code_verifier:
+        return jsonify({"error": "Missing code verifier. Please restart auth flow."}), 400
+
+    # Exchange code for tokens
+    config = _load_config()
+    client_id = config.get("TWITTER_CLIENT_ID", "")
+    client_secret = config.get("TWITTER_CLIENT_SECRET", "")
+
+    token_data = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": CALLBACK_URL,
+        "code_verifier": code_verifier,
+        "client_id": client_id,
+    }).encode()
+
+    token_req = urllib.request.Request(
+        "https://api.twitter.com/2/oauth2/token",
+        data=token_data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    # Add Basic auth if client_secret is available (confidential client)
+    if client_secret:
+        basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        token_req.add_header("Authorization", f"Basic {basic}")
+
+    try:
+        with urllib.request.urlopen(token_req, timeout=30) as resp:
+            tokens = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        return jsonify({"status": "error", "message": f"Token exchange failed: {error_body}"}), 500
+
+    # Save tokens to config.env
+    _save_oauth_tokens(tokens)
+
+    return jsonify({
+        "status": "success",
+        "message": "授权成功！OAuth 2.0 tokens 已保存到 config.env",
+        "scope": tokens.get("scope", ""),
+        "token_type": tokens.get("token_type", ""),
+        "has_refresh_token": "refresh_token" in tokens,
+    })
+
+
+@app.route("/auth/status")
+def auth_status():
+    """Check current authentication status."""
+    config = _load_config()
+    has_oauth1 = bool(config.get("TWITTER_ACCESS_TOKEN"))
+    has_oauth2 = bool(config.get("OAUTH2_ACCESS_TOKEN"))
+    has_client_id = bool(config.get("TWITTER_CLIENT_ID"))
+
+    return jsonify({
+        "oauth1": {"configured": has_oauth1},
+        "oauth2": {
+            "configured": has_oauth2,
+            "client_id_set": has_client_id,
+            "has_refresh_token": bool(config.get("OAUTH2_REFRESH_TOKEN")),
+        },
+        "auth_url": "/auth/login" if has_client_id else None,
+        "callback_url": CALLBACK_URL,
     })
 
 
@@ -321,4 +501,4 @@ def api_publish():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5001)
