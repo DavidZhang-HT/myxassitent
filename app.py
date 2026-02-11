@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-<<<<<<< HEAD
-"""Flask application for MyXAssistant."""
-=======
 """
 MyXAssistant — Twitter/X 数据服务。
 
@@ -13,7 +10,6 @@ MyXAssistant — Twitter/X 数据服务。
 
 外部系统（如 OpenClaw）通过 HTTP API 与本服务交互，不直接访问数据库或脚本。
 """
->>>>>>> eebf01508a3af3c99b4621846c4b7ab6a74f99e3
 
 import sqlite3
 import threading
