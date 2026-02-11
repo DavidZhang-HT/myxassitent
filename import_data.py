@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import Twitter likes data from JSON into SQLite database."""
+"""Import Twitter likes data from JSON into MyXAssistant database."""
 
 import json
 import re

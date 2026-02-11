@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flask application for Twitter Likes analysis."""
+"""Flask application for MyXAssistant."""
 
 import sqlite3
 from pathlib import Path
