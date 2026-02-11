@@ -5,10 +5,12 @@ Twitter Likes Sync — 直连 Twitter API v2，增量同步到 SQLite 数据库�
 可以被以下方式调用：
   1. 命令行：python3 sync.py
   2. Flask 网页触发：POST /api/sync
-  3. OpenClaw agent 调用（通过 workspace 中的符号链接）
+  3. 外部系统通过 skill 安装后调用
 
-数据库路径可通过环境变量 TWITTER_LIKES_DB 指定，默认为本项目目录下的 twitter_likes.db。
-Twitter 凭证从 ~/.openclaw/credentials/twitter.env 读取。
+配置文件查找顺序（取第一个存在的）：
+  1. 环境变量 MYX_CONFIG 指定的路径
+  2. 项目目录下的 config.env
+数据库路径可通过环境变量 MYX_DB 指定，默认为项目目录下的 twitter_likes.db。
 """
 
 import base64
@@ -30,9 +32,19 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).parent
 DEFAULT_DB_PATH = PROJECT_DIR / "twitter_likes.db"
-CREDENTIALS_PATH = Path("~/.openclaw/credentials/twitter.env").expanduser()
+DEFAULT_CONFIG_PATH = PROJECT_DIR / "config.env"
 
-DB_PATH = Path(os.environ.get("TWITTER_LIKES_DB", str(DEFAULT_DB_PATH)))
+DB_PATH = Path(os.environ.get("MYX_DB", str(DEFAULT_DB_PATH)))
+
+
+def _resolve_config_path() -> Path:
+    """Resolve config.env path: env var > project dir."""
+    env_path = os.environ.get("MYX_CONFIG")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if p.exists():
+            return p
+    return DEFAULT_CONFIG_PATH
 
 
 def _load_env_file(path: Path) -> dict[str, str]:
@@ -221,7 +233,8 @@ class TwitterAPI:
 
     def __init__(self, credentials: dict[str, str] | None = None):
         if credentials is None:
-            credentials = _load_env_file(CREDENTIALS_PATH)
+            config_path = _resolve_config_path()
+            credentials = _load_env_file(config_path)
 
         self.api_key = credentials.get("TWITTER_API_KEY", "")
         self.api_secret = credentials.get("TWITTER_API_SECRET", "")
@@ -229,9 +242,12 @@ class TwitterAPI:
         self.access_secret = credentials.get("TWITTER_ACCESS_SECRET", "")
 
         if not all([self.api_key, self.api_secret, self.access_token, self.access_secret]):
+            config_path = _resolve_config_path()
             raise ValueError(
-                "Missing Twitter API credentials. "
-                f"Checked: {CREDENTIALS_PATH}"
+                "Missing Twitter API credentials.\n"
+                f"  Config file: {config_path}\n"
+                f"  Exists: {config_path.exists()}\n"
+                "  Copy config.env.example to config.env and fill in your credentials."
             )
 
     # -- OAuth 1.0a helpers --------------------------------------------------
@@ -487,7 +503,7 @@ if __name__ == "__main__":
         mode_label = "完整同步" if full_mode else "增量同步 (仅第一页)"
         print(f"从 Twitter API {mode_label}...")
         print(f"数据库: {DB_PATH}")
-        print(f"凭证: {CREDENTIALS_PATH}")
+        print(f"凭证: {_resolve_config_path()}")
         if not full_mode:
             print("提示: 使用 --full 参数可获取全部历史数据")
         result = sync_from_api(max_pages=pages)
