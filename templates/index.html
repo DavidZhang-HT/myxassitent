@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Twitter Likes 分析</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ------------------------------------------------------------------ */
+/* Reset & Variables                                                   */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0f1117;
+  --bg-card:     #181b24;
+  --bg-hover:    #1f2330;
+  --border:      #2a2e3a;
+  --text:        #e4e6eb;
+  --text-dim:    #8b8fa3;
+  --accent:      #1d9bf0;
+  --accent-dim:  #1a8cd814;
+  --green:       #00ba7c;
+  --pink:        #f91880;
+  --radius:      12px;
+  --radius-sm:   8px;
+  --max-w:       1200px;
+  --transition:  0.2s ease;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+.container { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 0;
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); backdrop-filter: blur(12px);
+}
+header .container { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+header h1 { font-size: 1.4rem; font-weight: 700; white-space: nowrap; }
+header h1 span { color: var(--accent); }
+
+/* ------------------------------------------------------------------ */
+/* Stats Bar                                                           */
+/* ------------------------------------------------------------------ */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 24px 0;
+}
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  transition: border-color var(--transition);
+}
+.stat-card:hover { border-color: var(--accent); }
+.stat-card .label { font-size: 0.8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-card .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+.stat-card .sub   { font-size: 0.8rem; color: var(--text-dim); margin-top: 2px; }
+
+/* ------------------------------------------------------------------ */
+/* Controls                                                            */
+/* ------------------------------------------------------------------ */
+.controls {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  padding: 16px 0; border-bottom: 1px solid var(--border);
+}
+
+.search-box {
+  position: relative; flex: 1 1 300px;
+}
+.search-box input {
+  width: 100%; padding: 10px 14px 10px 40px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  font-size: 0.95rem; outline: none;
+  transition: border-color var(--transition);
+}
+.search-box input:focus { border-color: var(--accent); }
+.search-box input::placeholder { color: var(--text-dim); }
+.search-box svg {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px; color: var(--text-dim); pointer-events: none;
+}
+
+select, .btn {
+  padding: 10px 16px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  font-size: 0.9rem; cursor: pointer; outline: none;
+  transition: border-color var(--transition);
+}
+select:focus, .btn:hover { border-color: var(--accent); }
+select option { background: var(--bg-card); }
+
+/* ------------------------------------------------------------------ */
+/* Main Layout: sidebar + feed                                         */
+/* ------------------------------------------------------------------ */
+.main-grid {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 24px;
+  padding: 24px 0 60px;
+}
+@media (max-width: 768px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}
+
+/* Sidebar */
+.sidebar { position: sticky; top: 90px; align-self: start; }
+.sidebar h3 {
+  font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-dim); margin-bottom: 12px;
+}
+.cat-list { list-style: none; }
+.cat-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background var(--transition);
+  font-size: 0.9rem;
+}
+.cat-list li:hover { background: var(--bg-hover); }
+.cat-list li.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.cat-list li .badge {
+  background: var(--bg); padding: 2px 8px; border-radius: 99px;
+  font-size: 0.75rem; color: var(--text-dim); font-weight: 500;
+}
+.cat-list li.active .badge { background: var(--accent); color: #fff; }
+
+.author-section { margin-top: 28px; }
+.author-list { list-style: none; max-height: 260px; overflow-y: auto; }
+.author-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background var(--transition);
+  font-size: 0.85rem;
+}
+.author-list li:hover { background: var(--bg-hover); }
+.author-list li.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.author-list li .badge { background: var(--bg); padding: 1px 6px; border-radius: 99px; font-size: 0.7rem; color: var(--text-dim); }
+.author-list li.active .badge { background: var(--accent); color: #fff; }
+
+/* ------------------------------------------------------------------ */
+/* Tweet Cards                                                         */
+/* ------------------------------------------------------------------ */
+.feed { min-width: 0; }
+.feed-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.feed-header .count { color: var(--text-dim); font-size: 0.9rem; }
+
+.tweet-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 12px;
+  transition: border-color var(--transition), transform var(--transition);
+}
+.tweet-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+.tweet-meta {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px;
+}
+.avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--pink));
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 1rem; color: #fff; flex-shrink: 0;
+}
+.tweet-author { flex: 1; min-width: 0; }
+.tweet-author .name { font-weight: 600; font-size: 0.95rem; }
+.tweet-author .handle { color: var(--text-dim); font-size: 0.85rem; }
+.tweet-date { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
+
+.tweet-text {
+  font-size: 0.95rem; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word;
+  margin-bottom: 12px;
+}
+.tweet-text mark {
+  background: var(--accent-dim); color: var(--accent);
+  border-radius: 2px; padding: 0 2px;
+}
+
+.tweet-footer {
+  display: flex; align-items: center; gap: 24px;
+  font-size: 0.85rem; color: var(--text-dim);
+}
+.tweet-footer .stat { display: flex; align-items: center; gap: 4px; }
+.tweet-footer .stat svg { width: 16px; height: 16px; }
+.tweet-footer .tags { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.tag {
+  padding: 2px 10px; border-radius: 99px;
+  font-size: 0.75rem; font-weight: 500;
+  background: var(--bg); border: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Pagination                                                          */
+/* ------------------------------------------------------------------ */
+.pagination {
+  display: flex; justify-content: center; align-items: center;
+  gap: 8px; padding: 24px 0;
+}
+.pagination button {
+  padding: 8px 16px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  cursor: pointer; font-size: 0.9rem;
+  transition: all var(--transition);
+}
+.pagination button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pagination button:disabled { opacity: 0.35; cursor: not-allowed; }
+.pagination .page-info { font-size: 0.9rem; color: var(--text-dim); min-width: 120px; text-align: center; }
+
+/* ------------------------------------------------------------------ */
+/* Loading                                                             */
+/* ------------------------------------------------------------------ */
+.loading { text-align: center; padding: 40px; color: var(--text-dim); }
+.spinner {
+  display: inline-block; width: 28px; height: 28px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="container">
+    <h1><span>&#x2764;</span> Twitter Likes 分析工具</h1>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="container">
+  <div class="stats-bar" id="statsBar">
+    <div class="stat-card"><div class="label">总点赞数</div><div class="value" id="statTotal">-</div></div>
+    <div class="stat-card"><div class="label">独立作者</div><div class="value" id="statAuthors">-</div></div>
+    <div class="stat-card"><div class="label">分类总数</div><div class="value" id="statCats">-</div></div>
+    <div class="stat-card"><div class="label">时间跨度</div><div class="value" id="statRange" style="font-size:1rem">-</div></div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="container">
+  <div class="controls">
+    <div class="search-box">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/>
+      </svg>
+      <input type="text" id="searchInput" placeholder="搜索推文内容、作者...">
+    </div>
+    <select id="sortSelect">
+      <option value="created_at">按时间排序</option>
+      <option value="favorite_count">按点赞数排序</option>
+      <option value="retweet_count">按转发数排序</option>
+    </select>
+    <select id="orderSelect">
+      <option value="desc">降序</option>
+      <option value="asc">升序</option>
+    </select>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="container">
+  <div class="main-grid">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h3>分类筛选</h3>
+      <ul class="cat-list" id="catList"></ul>
+      <div class="author-section">
+        <h3>热门作者</h3>
+        <ul class="author-list" id="authorList"></ul>
+      </div>
+    </aside>
+
+    <!-- Feed -->
+    <div class="feed">
+      <div class="feed-header">
+        <div class="count" id="feedCount"></div>
+      </div>
+      <div id="tweetFeed"><div class="loading"><div class="spinner"></div><p style="margin-top:12px">加载中...</p></div></div>
+      <div class="pagination" id="pagination"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ====================================================================
+// State
+// ====================================================================
+const state = {
+  q: '',
+  category: null,
+  author: '',
+  sort: 'created_at',
+  order: 'desc',
+  page: 1,
+  perPage: 20,
+};
+
+// ====================================================================
+// Helpers
+// ====================================================================
+function qs(sel) { return document.querySelector(sel); }
+function formatNum(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n; }
+function formatDate(d) {
+  const dt = new Date(d);
+  return dt.toLocaleDateString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function initials(name) {
+  return name.split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+}
+function hashColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  const hue = Math.abs(h % 360);
+  return `hsl(${hue}, 65%, 55%)`;
+}
+
+// Debounce
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+// ====================================================================
+// Fetch Stats
+// ====================================================================
+async function loadStats() {
+  const res = await fetch('/api/stats');
+  const d = await res.json();
+  qs('#statTotal').textContent = d.total.toLocaleString();
+  qs('#statAuthors').textContent = d.authors.toLocaleString();
+  qs('#statCats').textContent = d.categories.length;
+  qs('#statRange').textContent =
+    formatDate(d.date_range.min) + ' – ' + formatDate(d.date_range.max);
+
+  // Categories
+  const catList = qs('#catList');
+  catList.innerHTML = `<li class="${state.category === null ? 'active' : ''}" data-cat="">全部 <span class="badge">${d.total}</span></li>`;
+  d.categories.forEach(c => {
+    catList.innerHTML += `<li class="${state.category === c.id ? 'active' : ''}" data-cat="${c.id}">${c.name} <span class="badge">${c.count}</span></li>`;
+  });
+
+  // Authors
+  const authList = qs('#authorList');
+  authList.innerHTML = '';
+  d.top_authors.forEach(a => {
+    authList.innerHTML += `<li class="${state.author === a.screen_name ? 'active' : ''}" data-author="${a.screen_name}">@${a.screen_name} <span class="badge">${a.count}</span></li>`;
+  });
+
+  // Event handlers
+  catList.querySelectorAll('li').forEach(li => {
+    li.addEventListener('click', () => {
+      const v = li.dataset.cat;
+      state.category = v ? parseInt(v) : null;
+      state.page = 1;
+      loadStats();
+      loadTweets();
+    });
+  });
+  authList.querySelectorAll('li').forEach(li => {
+    li.addEventListener('click', () => {
+      const v = li.dataset.author;
+      state.author = state.author === v ? '' : v;
+      state.page = 1;
+      loadStats();
+      loadTweets();
+    });
+  });
+}
+
+// ====================================================================
+// Fetch Tweets
+// ====================================================================
+async function loadTweets() {
+  const params = new URLSearchParams();
+  if (state.q) params.set('q', state.q);
+  if (state.category !== null) params.set('category', state.category);
+  if (state.author) params.set('author', state.author);
+  params.set('sort', state.sort);
+  params.set('order', state.order);
+  params.set('page', state.page);
+  params.set('per_page', state.perPage);
+
+  qs('#tweetFeed').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  const res = await fetch('/api/tweets?' + params);
+  const d = await res.json();
+
+  qs('#feedCount').textContent = `共 ${d.total.toLocaleString()} 条结果`;
+
+  if (d.tweets.length === 0) {
+    qs('#tweetFeed').innerHTML = '<div class="loading" style="padding:60px">没有找到匹配的推文</div>';
+    qs('#pagination').innerHTML = '';
+    return;
+  }
+
+  let html = '';
+  d.tweets.forEach(t => {
+    const color = hashColor(t.author_screen_name);
+    const cats = t.categories.split(', ').map(c => `<span class="tag">${escapeHtml(c)}</span>`).join('');
+    let displayText = escapeHtml(t.text);
+    // Highlight search query words
+    if (state.q) {
+      state.q.split(/\s+/).filter(Boolean).forEach(w => {
+        const re = new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        displayText = displayText.replace(re, '<mark>$1</mark>');
+      });
+    }
+    html += `
+      <div class="tweet-card">
+        <div class="tweet-meta">
+          <div class="avatar" style="background:${color}">${initials(t.author_name)}</div>
+          <div class="tweet-author">
+            <div class="name">${escapeHtml(t.author_name)}</div>
+            <div class="handle">@${escapeHtml(t.author_screen_name)}</div>
+          </div>
+          <div class="tweet-date">${formatDate(t.created_at)}</div>
+        </div>
+        <div class="tweet-text">${displayText}</div>
+        <div class="tweet-footer">
+          <span class="stat" title="转发">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+            ${formatNum(t.retweet_count)}
+          </span>
+          <span class="stat" style="color:var(--pink)" title="点赞">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+            ${formatNum(t.favorite_count)}
+          </span>
+          <a href="${t.tweet_url}" target="_blank" rel="noopener" style="color:var(--text-dim); font-size:0.8rem;">查看原文 →</a>
+          <span class="tags">${cats}</span>
+        </div>
+      </div>`;
+  });
+  qs('#tweetFeed').innerHTML = html;
+
+  // Pagination
+  const pg = qs('#pagination');
+  pg.innerHTML = `
+    <button id="pgFirst" ${d.page <= 1 ? 'disabled' : ''}>首页</button>
+    <button id="pgPrev" ${d.page <= 1 ? 'disabled' : ''}>上一页</button>
+    <span class="page-info">第 ${d.page} / ${d.total_pages} 页</span>
+    <button id="pgNext" ${d.page >= d.total_pages ? 'disabled' : ''}>下一页</button>
+    <button id="pgLast" ${d.page >= d.total_pages ? 'disabled' : ''}>末页</button>
+  `;
+  qs('#pgFirst').onclick = () => { state.page = 1; loadTweets(); };
+  qs('#pgPrev').onclick  = () => { state.page--; loadTweets(); };
+  qs('#pgNext').onclick  = () => { state.page++; loadTweets(); };
+  qs('#pgLast').onclick  = () => { state.page = d.total_pages; loadTweets(); };
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ====================================================================
+// Event Bindings
+// ====================================================================
+qs('#searchInput').addEventListener('input', debounce(e => {
+  state.q = e.target.value.trim();
+  state.page = 1;
+  loadTweets();
+}, 350));
+
+qs('#sortSelect').addEventListener('change', e => {
+  state.sort = e.target.value;
+  state.page = 1;
+  loadTweets();
+});
+
+qs('#orderSelect').addEventListener('change', e => {
+  state.order = e.target.value;
+  state.page = 1;
+  loadTweets();
+});
+
+// ====================================================================
+// Init
+// ====================================================================
+loadStats();
+loadTweets();
+</script>
+</body>
+</html>
