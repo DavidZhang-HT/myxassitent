@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "twitter_likes.db"
+DB_PATH = Path(__file__).parent / "myxassistant.db"
 
 # ---------------------------------------------------------------------------
 # Category detection – keyword‑based heuristic

@@ -22,7 +22,7 @@ from pathlib import Path
 from flask import Flask, g, jsonify, render_template, request
 
 app = Flask(__name__)
-DB_PATH = Path(__file__).parent / "twitter_likes.db"
+DB_PATH = Path(__file__).parent / "myxassistant.db"
 
 # Sync state (shared across requests)
 _sync_lock = threading.Lock()

@@ -31,7 +31,7 @@ from pathlib import Path
 # Paths & Config
 # ---------------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).parent
-DEFAULT_DB_PATH = PROJECT_DIR / "twitter_likes.db"
+DEFAULT_DB_PATH = PROJECT_DIR / "myxassistant.db"
 DEFAULT_CONFIG_PATH = PROJECT_DIR / "config.env"
 
 DB_PATH = Path(os.environ.get("MYX_DB", str(DEFAULT_DB_PATH)))
