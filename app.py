@@ -468,13 +468,70 @@ def api_sync_log():
 
 
 # ---------------------------------------------------------------------------
+# API — Media upload
+# ---------------------------------------------------------------------------
+# Allowed MIME types and max sizes
+ALLOWED_MEDIA = {
+    "image/jpeg": 5 * 1024 * 1024,
+    "image/png":  5 * 1024 * 1024,
+    "image/gif":  15 * 1024 * 1024,
+    "image/webp": 5 * 1024 * 1024,
+    "video/mp4":  512 * 1024 * 1024,
+}
+
+
+@app.route("/api/media/upload", methods=["POST"])
+def api_media_upload():
+    """Upload media (image or video) to Twitter.
+
+    Accepts multipart/form-data with a 'file' field.
+    Returns: {"media_id": "...", "media_type": "...", "size": ...}
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "Missing 'file' in request"}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    media_type = f.content_type or ""
+    if media_type not in ALLOWED_MEDIA:
+        return jsonify({
+            "error": f"Unsupported media type: {media_type}",
+            "supported": list(ALLOWED_MEDIA.keys()),
+        }), 400
+
+    file_data = f.read()
+    max_size = ALLOWED_MEDIA[media_type]
+    if len(file_data) > max_size:
+        return jsonify({
+            "error": f"File too large: {len(file_data)} bytes (max {max_size // 1024 // 1024} MB)",
+        }), 400
+
+    try:
+        from sync import TwitterAPI
+        api = TwitterAPI()
+        media_id = api.upload_media(file_data, media_type)
+        return jsonify({
+            "status": "success",
+            "media_id": media_id,
+            "media_type": media_type,
+            "size": len(file_data),
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
 # API — Publish tweet
 # ---------------------------------------------------------------------------
 @app.route("/api/publish", methods=["POST"])
 def api_publish():
-    """Publish a new tweet.
+    """Publish a new tweet, optionally with media.
 
-    JSON body: {"text": "tweet content"}
+    JSON body: {"text": "tweet content", "media_ids": ["id1", "id2"]}
+    - text: required, max 280 characters
+    - media_ids: optional, list of media_id strings from /api/media/upload (max 4)
     Returns the created tweet data from Twitter API.
     """
     body = request.get_json(silent=True)
@@ -487,10 +544,15 @@ def api_publish():
     if len(text) > 280:
         return jsonify({"error": f"Tweet too long: {len(text)}/280 characters"}), 400
 
+    media_ids = body.get("media_ids")
+    if media_ids:
+        if not isinstance(media_ids, list) or len(media_ids) > 4:
+            return jsonify({"error": "media_ids must be a list of up to 4 IDs"}), 400
+
     try:
         from sync import TwitterAPI
         api = TwitterAPI()
-        result = api.post_tweet(text)
+        result = api.post_tweet(text, media_ids=media_ids or None)
         return jsonify({"status": "success", "tweet": result})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

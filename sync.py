@@ -19,6 +19,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import time
 import urllib.error
@@ -309,20 +310,170 @@ class TwitterAPI:
             params["pagination_token"] = pagination_token
         return self._get(url, params)
 
-    def post_tweet(self, text: str) -> dict:
-        """Publish a tweet using Twitter API v2."""
-        url = "https://api.twitter.com/2/tweets"
-        payload = json.dumps({"text": text}).encode()
+    # -- Media upload helpers -------------------------------------------------
+    UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
+    CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB per chunk
+
+    # media_type -> (max_bytes, media_category)
+    MEDIA_LIMITS: dict[str, tuple[int, str]] = {
+        "image/jpeg": (5 * 1024 * 1024, "tweet_image"),
+        "image/png":  (5 * 1024 * 1024, "tweet_image"),
+        "image/gif":  (15 * 1024 * 1024, "tweet_gif"),
+        "image/webp": (5 * 1024 * 1024, "tweet_image"),
+        "video/mp4":  (512 * 1024 * 1024, "tweet_video"),
+    }
+
+    def _post_form(self, url: str, fields: dict[str, str],
+                   file_field: str | None = None,
+                   file_data: bytes | None = None,
+                   file_name: str | None = None,
+                   file_content_type: str | None = None) -> dict:
+        """POST multipart/form-data with OAuth 1.0a."""
+        boundary = f"----WebKitFormBoundary{secrets.token_hex(16)}"
+        body_parts: list[bytes] = []
+
+        for k, v in fields.items():
+            body_parts.append(
+                f"--{boundary}\r\n"
+                f"Content-Disposition: form-data; name=\"{k}\"\r\n\r\n"
+                f"{v}\r\n".encode()
+            )
+
+        if file_field and file_data is not None:
+            body_parts.append(
+                f"--{boundary}\r\n"
+                f"Content-Disposition: form-data; name=\"{file_field}\"; "
+                f"filename=\"{file_name or 'media'}\"\r\n"
+                f"Content-Type: {file_content_type or 'application/octet-stream'}\r\n"
+                f"Content-Transfer-Encoding: binary\r\n\r\n".encode()
+                + file_data + b"\r\n"
+            )
+
+        body_parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(body_parts)
+
+        # OAuth signs against base URL without query params; form fields NOT included
         auth_header = self._auth_header("POST", url)
         req = urllib.request.Request(
-            url,
-            data=payload,
+            url, data=body, method="POST",
+            headers={
+                "Authorization": auth_header,
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "MyXAssistant/1.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()
+            raise Exception(f"Media upload error {e.code}: {error_body}")
+
+    def upload_media_simple(self, file_data: bytes, media_type: str) -> str:
+        """Upload an image via simple multipart upload. Returns media_id_string."""
+        result = self._post_form(
+            self.UPLOAD_URL, fields={},
+            file_field="media_data",
+            file_data=file_data,
+            file_name="media",
+            file_content_type=media_type,
+        )
+        return result["media_id_string"]
+
+    def upload_media_chunked(self, file_data: bytes, media_type: str,
+                             media_category: str = "tweet_video") -> str:
+        """Upload video/large GIF via chunked upload. Returns media_id_string."""
+        # INIT
+        init_fields = {
+            "command": "INIT",
+            "total_bytes": str(len(file_data)),
+            "media_type": media_type,
+            "media_category": media_category,
+        }
+        init_resp = self._post_form(self.UPLOAD_URL, fields=init_fields)
+        media_id = init_resp["media_id_string"]
+
+        # APPEND (chunked)
+        for i in range(0, len(file_data), self.CHUNK_SIZE):
+            chunk = file_data[i:i + self.CHUNK_SIZE]
+            segment = i // self.CHUNK_SIZE
+            self._post_form(
+                self.UPLOAD_URL,
+                fields={"command": "APPEND", "media_id": media_id,
+                         "segment_index": str(segment)},
+                file_field="media_data",
+                file_data=chunk,
+                file_name="chunk",
+                file_content_type="application/octet-stream",
+            )
+
+        # FINALIZE
+        self._post_form(self.UPLOAD_URL,
+                        fields={"command": "FINALIZE", "media_id": media_id})
+
+        # STATUS — poll until processing completes (videos need async processing)
+        if media_category == "tweet_video":
+            self._wait_for_processing(media_id)
+
+        return media_id
+
+    def _wait_for_processing(self, media_id: str, max_wait: int = 120):
+        """Poll media STATUS until processing completes."""
+        url = f"{self.UPLOAD_URL}?command=STATUS&media_id={media_id}"
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            req = urllib.request.Request(
+                url, method="GET",
+                headers={
+                    "Authorization": self._auth_header("GET",
+                        self.UPLOAD_URL, {"command": "STATUS", "media_id": media_id}),
+                    "User-Agent": "MyXAssistant/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+            info = data.get("processing_info", {})
+            state = info.get("state", "")
+            if state == "succeeded":
+                return
+            if state == "failed":
+                raise Exception(f"Media processing failed: {info.get('error', {})}")
+            wait = info.get("check_after_secs", 5)
+            time.sleep(min(wait, 10))
+        raise Exception("Media processing timed out")
+
+    def upload_media(self, file_data: bytes, media_type: str) -> str:
+        """Smart upload: simple for images, chunked for video/large GIF."""
+        limit_info = self.MEDIA_LIMITS.get(media_type)
+        if not limit_info:
+            raise ValueError(f"Unsupported media type: {media_type}. "
+                             f"Supported: {', '.join(self.MEDIA_LIMITS.keys())}")
+        max_bytes, category = limit_info
+        if len(file_data) > max_bytes:
+            raise ValueError(
+                f"File too large: {len(file_data)} bytes "
+                f"(max {max_bytes // 1024 // 1024} MB for {media_type})")
+
+        if media_type == "video/mp4" or (media_type == "image/gif" and len(file_data) > 5 * 1024 * 1024):
+            return self.upload_media_chunked(file_data, media_type, category)
+        return self.upload_media_simple(file_data, media_type)
+
+    # -- Tweet posting --------------------------------------------------------
+    def post_tweet(self, text: str, media_ids: list[str] | None = None) -> dict:
+        """Publish a tweet, optionally with media attachments."""
+        url = "https://api.twitter.com/2/tweets"
+        payload: dict = {"text": text}
+        if media_ids:
+            payload["media"] = {"media_ids": media_ids}
+        data = json.dumps(payload).encode()
+        auth_header = self._auth_header("POST", url)
+        req = urllib.request.Request(
+            url, data=data, method="POST",
             headers={
                 "Authorization": auth_header,
                 "Content-Type": "application/json",
                 "User-Agent": "MyXAssistant/1.0",
             },
-            method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
